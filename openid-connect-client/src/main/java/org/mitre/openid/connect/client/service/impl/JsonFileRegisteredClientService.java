@@ -1,35 +1,34 @@
 /*******************************************************************************
- * Copyright 2014 The MITRE Corporation
- *   and the MIT Kerberos and Internet Trust Consortium
- * 
+ * Copyright 2016 The MITRE Corporation
+ *   and the MIT Internet Trust Consortium
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *   http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- ******************************************************************************/
+ *******************************************************************************/
 /**
  * 
  */
 package org.mitre.openid.connect.client.service.impl;
 
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.lang.reflect.Type;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 
 import org.mitre.oauth2.model.RegisteredClient;
+import org.mitre.openid.connect.ClientDetailsEntityJsonProcessor;
 import org.mitre.openid.connect.client.service.RegisteredClientService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,7 +39,6 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonDeserializationContext;
 import com.google.gson.JsonDeserializer;
 import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonSerializationContext;
 import com.google.gson.JsonSerializer;
@@ -51,49 +49,30 @@ import com.google.gson.JsonSerializer;
  */
 public class JsonFileRegisteredClientService implements RegisteredClientService {
 
-	private static Logger logger = LoggerFactory.getLogger(JsonFileRegisteredClientService.class);
+	/**
+	 * Logger for this class
+	 */
+	private static final Logger logger = LoggerFactory.getLogger(JsonFileRegisteredClientService.class);
 
 	private Gson gson = new GsonBuilder()
 	.registerTypeAdapter(RegisteredClient.class, new JsonSerializer<RegisteredClient>() {
 		@Override
 		public JsonElement serialize(RegisteredClient src, Type typeOfSrc, JsonSerializationContext context) {
-			JsonObject obj = new JsonObject();
-			obj.addProperty("token", src.getRegistrationAccessToken());
-			obj.addProperty("uri", src.getRegistrationClientUri());
-			if (src.getClientIdIssuedAt() != null) {
-				obj.addProperty("issued", src.getClientIdIssuedAt().getTime());
-			}
-			if (src.getClientSecretExpiresAt() != null) {
-				obj.addProperty("expires", src.getClientSecretExpiresAt().getTime());
-			}
-			return obj;
+			return ClientDetailsEntityJsonProcessor.serialize(src);
 		}
 	})
 	.registerTypeAdapter(RegisteredClient.class, new JsonDeserializer<RegisteredClient>() {
 		@Override
 		public RegisteredClient deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context) throws JsonParseException {
-			if (json.isJsonObject()) {
-				JsonObject src = json.getAsJsonObject();
-				RegisteredClient rc = new RegisteredClient();
-				rc.setRegistrationAccessToken(src.get("token").getAsString());
-				rc.setRegistrationClientUri(src.get("uri").getAsString());
-				if (src.has("issued") && !src.get("issued").isJsonNull()) {
-					rc.setClientIdIssuedAt(new Date(src.get("issued").getAsLong()));
-				}
-				if (src.has("expires") && !src.get("expires").isJsonNull()) {
-					rc.setClientSecretExpiresAt(new Date(src.get("expires").getAsLong()));
-				}
-				return rc;
-			} else {
-				return null;
-			}
+			return ClientDetailsEntityJsonProcessor.parseRegistered(json);
 		}
 	})
+	.setPrettyPrinting()
 	.create();
 
 	private File file;
 
-	private Map<String, RegisteredClient> clients = new HashMap<String, RegisteredClient>();
+	private Map<String, RegisteredClient> clients = new HashMap<>();
 
 	public JsonFileRegisteredClientService(String filename) {
 		this.file = new File(filename);
@@ -120,6 +99,7 @@ public class JsonFileRegisteredClientService implements RegisteredClientService 
 	/**
 	 * Sync the map of clients out to disk.
 	 */
+	@SuppressWarnings("serial")
 	private void write() {
 		try {
 			if (!file.exists()) {
@@ -133,8 +113,6 @@ public class JsonFileRegisteredClientService implements RegisteredClientService 
 
 			out.close();
 
-		} catch (FileNotFoundException e) {
-			logger.error("Could not write to output file", e);
 		} catch (IOException e) {
 			logger.error("Could not write to output file", e);
 		}
@@ -143,6 +121,7 @@ public class JsonFileRegisteredClientService implements RegisteredClientService 
 	/**
 	 * Load the map in from disk.
 	 */
+	@SuppressWarnings("serial")
 	private void load() {
 		try {
 			if (!file.exists()) {
@@ -155,8 +134,6 @@ public class JsonFileRegisteredClientService implements RegisteredClientService 
 
 			in.close();
 
-		} catch (FileNotFoundException e) {
-			logger.error("Could not read from input file", e);
 		} catch (IOException e) {
 			logger.error("Could not read from input file", e);
 		}

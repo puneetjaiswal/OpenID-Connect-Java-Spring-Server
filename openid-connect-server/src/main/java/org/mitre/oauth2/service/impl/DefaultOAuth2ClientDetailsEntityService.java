@@ -1,19 +1,19 @@
 /*******************************************************************************
- * Copyright 2014 The MITRE Corporation
- *   and the MIT Kerberos and Internet Trust Consortium
- * 
+ * Copyright 2016 The MITRE Corporation
+ *   and the MIT Internet Trust Consortium
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *   http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- ******************************************************************************/
+ *******************************************************************************/
 package org.mitre.oauth2.service.impl;
 
 import java.math.BigInteger;
@@ -22,23 +22,29 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Date;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.codec.binary.Base64;
 import org.apache.http.client.HttpClient;
-import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.impl.client.HttpClientBuilder;
 import org.mitre.oauth2.model.ClientDetailsEntity;
+import org.mitre.oauth2.model.ClientDetailsEntity.AuthMethod;
+import org.mitre.oauth2.model.SystemScope;
 import org.mitre.oauth2.repository.OAuth2ClientRepository;
 import org.mitre.oauth2.repository.OAuth2TokenRepository;
 import org.mitre.oauth2.service.ClientDetailsEntityService;
 import org.mitre.oauth2.service.SystemScopeService;
+import org.mitre.openid.connect.config.ConfigurationPropertiesBean;
 import org.mitre.openid.connect.model.WhitelistedSite;
 import org.mitre.openid.connect.service.ApprovedSiteService;
 import org.mitre.openid.connect.service.BlacklistedSiteService;
 import org.mitre.openid.connect.service.StatsService;
 import org.mitre.openid.connect.service.WhitelistedSiteService;
+import org.mitre.uma.model.ResourceSet;
+import org.mitre.uma.service.ResourceSetService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -47,6 +53,8 @@ import org.springframework.security.oauth2.common.exceptions.InvalidClientExcept
 import org.springframework.security.oauth2.common.exceptions.OAuth2Exception;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.UriComponents;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import com.google.common.base.Strings;
 import com.google.common.cache.CacheBuilder;
@@ -59,7 +67,10 @@ import com.google.gson.JsonParser;
 @Service
 public class DefaultOAuth2ClientDetailsEntityService implements ClientDetailsEntityService {
 
-	private static Logger logger = LoggerFactory.getLogger(DefaultOAuth2ClientDetailsEntityService.class);
+	/**
+	 * Logger for this class
+	 */
+	private static final Logger logger = LoggerFactory.getLogger(DefaultOAuth2ClientDetailsEntityService.class);
 
 	@Autowired
 	private OAuth2ClientRepository clientRepository;
@@ -81,6 +92,12 @@ public class DefaultOAuth2ClientDetailsEntityService implements ClientDetailsEnt
 
 	@Autowired
 	private StatsService statsService;
+
+	@Autowired
+	private ResourceSetService resourceSetService;
+
+	@Autowired
+	private ConfigurationPropertiesBean config;
 
 	// map of sector URI -> list of redirect URIs
 	private LoadingCache<String, List<String>> sectorRedirects = CacheBuilder.newBuilder()
@@ -107,19 +124,61 @@ public class DefaultOAuth2ClientDetailsEntityService implements ClientDetailsEnt
 		if (Strings.isNullOrEmpty(client.getClientId())) {
 			client = generateClientId(client);
 		}
+		
+		// make sure that clients with the "refresh_token" grant type have the "offline_access" scope, and vice versa
+		ensureRefreshTokenConsistency(client);
 
-		// if the client is flagged to allow for refresh tokens, make sure it's got the right granted scopes
-		if (client.isAllowRefresh()) {
-			client.getScope().add(SystemScopeService.OFFLINE_ACCESS);
-		} else {
-			client.getScope().remove(SystemScopeService.OFFLINE_ACCESS);
-		}
+		// make sure we don't have both a JWKS and a JWKS URI
+		ensureKeyConsistency(client);
+		
+		// check consistency when using HEART mode
+		checkHeartMode(client);
 
 		// timestamp this to right now
 		client.setCreatedAt(new Date());
 
 
 		// check the sector URI
+		checkSectorIdentifierUri(client);
+
+
+		ensureNoReservedScopes(client);
+
+		ClientDetailsEntity c = clientRepository.saveClient(client);
+
+		statsService.resetCache();
+
+		return c;
+	}
+
+	/**
+	 * Make sure the client has only one type of key registered
+	 * @param client
+	 */
+	private void ensureKeyConsistency(ClientDetailsEntity client) {
+		if (client.getJwksUri() != null && client.getJwks() != null) {
+			// a client can only have one key type or the other, not both
+			throw new IllegalArgumentException("A client cannot have both JWKS URI and JWKS value");
+		}
+	}
+
+	/**
+	 * Make sure the client doesn't request any system reserved scopes
+	 */
+	private void ensureNoReservedScopes(ClientDetailsEntity client) {
+		// make sure a client doesn't get any special system scopes
+		Set<SystemScope> requestedScope = scopeService.fromStrings(client.getScope());
+
+		requestedScope = scopeService.removeReservedScopes(requestedScope);
+
+		client.setScope(scopeService.toStrings(requestedScope));
+	}
+
+	/**
+	 * Load the sector identifier URI if it exists and check the redirect URIs against it
+	 * @param client
+	 */
+	private void checkSectorIdentifierUri(ClientDetailsEntity client) {
 		if (!Strings.isNullOrEmpty(client.getSectorIdentifierUri())) {
 			try {
 				List<String> redirects = sectorRedirects.get(client.getSectorIdentifierUri());
@@ -132,20 +191,133 @@ public class DefaultOAuth2ClientDetailsEntityService implements ClientDetailsEnt
 					}
 				}
 
-			} catch (ExecutionException e) {
-				throw new IllegalArgumentException("Unable to load sector identifier URI: " + client.getSectorIdentifierUri());
+			} catch (UncheckedExecutionException | ExecutionException e) {
+				throw new IllegalArgumentException("Unable to load sector identifier URI " + client.getSectorIdentifierUri() + ": " + e.getMessage());
 			}
 		}
+	}
 
+	/**
+	 * Make sure the client has the appropriate scope and grant type.
+	 * @param client
+	 */
+	private void ensureRefreshTokenConsistency(ClientDetailsEntity client) {
+		if (client.getAuthorizedGrantTypes().contains("refresh_token")
+				|| client.getScope().contains(SystemScopeService.OFFLINE_ACCESS)) {
+			client.getScope().add(SystemScopeService.OFFLINE_ACCESS);
+			client.getAuthorizedGrantTypes().add("refresh_token");
+		}
+	}
 
-		// make sure a client doesn't get any special system scopes
-		client.setScope(scopeService.removeRestrictedScopes(client.getScope()));
+	/**
+	 * If HEART mode is enabled, make sure the client meets the requirements:
+	 *  - Only one of authorization_code, implicit, or client_credentials can be used at a time
+	 *  - A redirect_uri must be registered with either authorization_code or implicit
+	 *  - A key must be registered
+	 *  - A client secret must not be generated
+	 *  - authorization_code and client_credentials must use the private_key authorization method 
+	 * @param client
+	 */
+	private void checkHeartMode(ClientDetailsEntity client) {
+		if (config.isHeartMode()) {
+			if (client.getGrantTypes().contains("authorization_code")) {
+				// make sure we don't have incompatible grant types
+				if (client.getGrantTypes().contains("implicit") || client.getGrantTypes().contains("client_credentials")) {
+					throw new IllegalArgumentException("[HEART mode] Incompatible grant types");
+				}
+				
+				// make sure we've got the right authentication method
+				if (client.getTokenEndpointAuthMethod() == null || !client.getTokenEndpointAuthMethod().equals(AuthMethod.PRIVATE_KEY)) {
+					throw new IllegalArgumentException("[HEART mode] Authorization code clients must use the private_key authentication method");
+				}
+				
+				// make sure we've got a redirect URI
+				if (client.getRedirectUris().isEmpty()) {
+					throw new IllegalArgumentException("[HEART mode] Authorization code clients must register at least one redirect URI");
+				}
+			}
+			
+			if (client.getGrantTypes().contains("implicit")) {
+				// make sure we don't have incompatible grant types
+				if (client.getGrantTypes().contains("authorization_code") || client.getGrantTypes().contains("client_credentials") || client.getGrantTypes().contains("refresh_token")) {
+					throw new IllegalArgumentException("[HEART mode] Incompatible grant types");
+				}
+				
+				// make sure we've got the right authentication method
+				if (client.getTokenEndpointAuthMethod() == null || !client.getTokenEndpointAuthMethod().equals(AuthMethod.NONE)) {
+					throw new IllegalArgumentException("[HEART mode] Implicit clients must use the none authentication method");
+				}
+				
+				// make sure we've got a redirect URI
+				if (client.getRedirectUris().isEmpty()) {
+					throw new IllegalArgumentException("[HEART mode] Implicit clients must register at least one redirect URI");
+				}
+			}
+			
+			if (client.getGrantTypes().contains("client_credentials")) {
+				// make sure we don't have incompatible grant types
+				if (client.getGrantTypes().contains("authorization_code") || client.getGrantTypes().contains("implicit") || client.getGrantTypes().contains("refresh_token")) {
+					throw new IllegalArgumentException("[HEART mode] Incompatible grant types");
+				}
+				
+				// make sure we've got the right authentication method
+				if (client.getTokenEndpointAuthMethod() == null || !client.getTokenEndpointAuthMethod().equals(AuthMethod.PRIVATE_KEY)) {
+					throw new IllegalArgumentException("[HEART mode] Client credentials clients must use the private_key authentication method");
+				}
+				
+				// make sure we've got a redirect URI
+				if (!client.getRedirectUris().isEmpty()) {
+					throw new IllegalArgumentException("[HEART mode] Client credentials clients must not register a redirect URI");
+				}
 
-		ClientDetailsEntity c = clientRepository.saveClient(client);
+			}
+		
+			if (client.getGrantTypes().contains("password")) {
+				throw new IllegalArgumentException("[HEART mode] Password grant type is forbidden");
+			}
 
-		statsService.resetCache();
+			// make sure we don't have a client secret
+			if (!Strings.isNullOrEmpty(client.getClientSecret())) {
+				throw new IllegalArgumentException("[HEART mode] Client secrets are not allowed");
+			}
 
-		return c;
+			// make sure we've got a key registered
+			if (client.getJwks() == null && Strings.isNullOrEmpty(client.getJwksUri())) {
+				throw new IllegalArgumentException("[HEART mode] All clients must have a key registered");
+			}
+
+			// make sure our redirect URIs each fit one of the allowed categories
+			if (client.getRedirectUris() != null && !client.getRedirectUris().isEmpty()) {
+				boolean localhost = false;
+				boolean remoteHttps = false;
+				boolean customScheme = false;
+				for (String uri : client.getRedirectUris()) {
+					UriComponents components = UriComponentsBuilder.fromUriString(uri).build();
+					if (components.getScheme() == null) {
+						// this is a very unknown redirect URI
+						customScheme = true;
+					} else if (components.getScheme().equals("http")) {
+						// http scheme, check for localhost
+						if (components.getHost().equals("localhost") || components.getHost().equals("127.0.0.1")) {
+							localhost = true;
+						} else {
+							throw new IllegalArgumentException("[HEART mode] Can't have an http redirect URI on non-local host");
+						}
+					} else if (components.getScheme().equals("https")) {
+						remoteHttps = true;
+					} else {
+						customScheme = true;
+					}
+				}
+				
+				// now we make sure the client has a URI in only one of each of the three categories
+				if (!((localhost ^ remoteHttps ^ customScheme)
+						&& !(localhost && remoteHttps && customScheme))) {
+					throw new IllegalArgumentException("[HEART mode] Can't have more than one class of redirect URI");
+				}
+			}
+			
+		}
 	}
 
 	/**
@@ -198,6 +370,12 @@ public class DefaultOAuth2ClientDetailsEntityService implements ClientDetailsEnt
 			whitelistedSiteService.remove(whitelistedSite);
 		}
 
+		// clear out resource sets registered for this client
+		Collection<ResourceSet> resourceSets = resourceSetService.getAllForClient(client);
+		for (ResourceSet rs : resourceSets) {
+			resourceSetService.remove(rs);
+		}
+
 		// take care of the client itself
 		clientRepository.deleteClient(client);
 
@@ -230,33 +408,19 @@ public class DefaultOAuth2ClientDetailsEntityService implements ClientDetailsEnt
 			}
 
 			// if the client is flagged to allow for refresh tokens, make sure it's got the right scope
-			if (newClient.isAllowRefresh()) {
-				newClient.getScope().add(SystemScopeService.OFFLINE_ACCESS);
-			} else {
-				newClient.getScope().remove(SystemScopeService.OFFLINE_ACCESS);
-			}
+			ensureRefreshTokenConsistency(newClient);
+
+			// make sure we don't have both a JWKS and a JWKS URI
+			ensureKeyConsistency(newClient);
+			
+			// check consistency when using HEART mode
+			checkHeartMode(newClient);
 
 			// check the sector URI
-			if (!Strings.isNullOrEmpty(newClient.getSectorIdentifierUri())) {
-				try {
-					List<String> redirects = sectorRedirects.get(newClient.getSectorIdentifierUri());
-
-					if (newClient.getRegisteredRedirectUri() != null) {
-						for (String uri : newClient.getRegisteredRedirectUri()) {
-							if (!redirects.contains(uri)) {
-								throw new IllegalArgumentException("Requested Redirect URI " + uri + " is not listed at sector identifier " + redirects);
-							}
-						}
-					}
-				} catch (UncheckedExecutionException ue) {
-					throw new IllegalArgumentException("Unable to load sector identifier URI: " + newClient.getSectorIdentifierUri());
-				} catch (ExecutionException e) {
-					throw new IllegalArgumentException("Unable to load sector identifier URI: " + newClient.getSectorIdentifierUri());
-				}
-			}
+			checkSectorIdentifierUri(newClient);
 
 			// make sure a client doesn't get any special system scopes
-			newClient.setScope(scopeService.removeRestrictedScopes(newClient.getScope()));
+			ensureNoReservedScopes(newClient);
 
 			return clientRepository.updateClient(oldClient.getId(), newClient);
 		}
@@ -285,7 +449,12 @@ public class DefaultOAuth2ClientDetailsEntityService implements ClientDetailsEnt
 	 */
 	@Override
 	public ClientDetailsEntity generateClientSecret(ClientDetailsEntity client) {
-		client.setClientSecret(Base64.encodeBase64URLSafeString(new BigInteger(512, new SecureRandom()).toByteArray()).replace("=", ""));
+		if (config.isHeartMode()) {
+			logger.error("[HEART mode] Can't generate a client secret, skipping step; client won't be saved due to invalid configuration");
+			client.setClientSecret(null);
+		} else {
+			client.setClientSecret(Base64.encodeBase64URLSafeString(new BigInteger(512, new SecureRandom()).toByteArray()).replace("=", ""));
+		}
 		return client;
 	}
 
@@ -296,7 +465,7 @@ public class DefaultOAuth2ClientDetailsEntityService implements ClientDetailsEnt
 	 *
 	 */
 	private class SectorIdentifierLoader extends CacheLoader<String, List<String>> {
-		private HttpClient httpClient = new DefaultHttpClient();
+		private HttpClient httpClient = HttpClientBuilder.create().useSystemProperties().build();
 		private HttpComponentsClientHttpRequestFactory httpFactory = new HttpComponentsClientHttpRequestFactory(httpClient);
 		private RestTemplate restTemplate = new RestTemplate(httpFactory);
 		private JsonParser parser = new JsonParser();
@@ -305,7 +474,9 @@ public class DefaultOAuth2ClientDetailsEntityService implements ClientDetailsEnt
 		public List<String> load(String key) throws Exception {
 
 			if (!key.startsWith("https")) {
-				// TODO: this should optionally throw an error (#506)
+				if (config.isForceHttps()) {
+					throw new IllegalArgumentException("Sector identifier must start with https: " + key);
+				}
 				logger.error("Sector identifier doesn't start with https, loading anyway...");
 			}
 
@@ -314,7 +485,7 @@ public class DefaultOAuth2ClientDetailsEntityService implements ClientDetailsEnt
 			JsonElement json = parser.parse(jsonString);
 
 			if (json.isJsonArray()) {
-				List<String> redirectUris = new ArrayList<String>();
+				List<String> redirectUris = new ArrayList<>();
 				for (JsonElement el : json.getAsJsonArray()) {
 					redirectUris.add(el.getAsString());
 				}
@@ -323,7 +494,7 @@ public class DefaultOAuth2ClientDetailsEntityService implements ClientDetailsEnt
 
 				return redirectUris;
 			} else {
-				return null;
+				throw new IllegalArgumentException("JSON Format Error");
 			}
 
 		}

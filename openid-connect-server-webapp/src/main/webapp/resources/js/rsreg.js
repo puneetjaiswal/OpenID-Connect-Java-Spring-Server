@@ -1,6 +1,6 @@
 /*******************************************************************************
- * Copyright 2014 The MITRE Corporation
- *   and the MIT Kerberos and Internet Trust Consortium
+ * Copyright 2016 The MITRE Corporation
+ *   and the MIT Internet Trust Consortium
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,7 +28,10 @@ var ResRegClient = Backbone.Model.extend({
         token_endpoint_auth_method:null,
         scope:null,
         policy_uri:null,
+        
         jwks_uri:null,
+        jwks:null,
+        jwksType:'URI',
         
         application_type:null,
         registration_access_token:null,
@@ -70,7 +73,7 @@ var ResRegRootView = Backbone.View.extend({
     	}
 
     	$('#loadingbox').sheet('show');
-    	$('#loading').html('<span class="label" id="loading-scopes">Scopes</span> ');
+    	$('#loading').html('<span class="label" id="loading-scopes">' + $.t('common.scopes') + '</span> ');
 
     	$.when(this.options.systemScopeList.fetchIfNeeded({success:function(e) {$('#loading-scopes').addClass('label-success');}}))
     	.done(function() {
@@ -81,6 +84,7 @@ var ResRegRootView = Backbone.View.extend({
     	
 	render:function() {
     	$(this.el).html($('#tmpl-rsreg').html());
+        $(this.el).i18n();
     	return this;
 	},
 	
@@ -104,12 +108,22 @@ var ResRegRootView = Backbone.View.extend({
 		
 		client.fetch({success: function() {
 			
+	        if (client.get("jwks")) {
+	        	client.set({
+	        		jwksType: "VAL"
+	        	}, { silent: true });
+	        } else {
+	        	client.set({
+	        		jwksType: "URI"
+	        	}, { silent: true });
+	        }
+			
 	    	var view = new ResRegEditView({model: client, systemScopeList: app.systemScopeList}); 
 	    	
 	    	view.load(function() {
 	    		$('#content').html(view.render().el);
 	    		view.delegateEvents();
-	    		setPageTitle("Dynamically Register a New Protected Resource");
+	    		setPageTitle($.t('rsreg.new'));
 	    		app.navigate('dev/resource/edit', {trigger: true});	    		
 	    		self.remove();
 	    	});
@@ -142,6 +156,8 @@ var ResRegEditView = Backbone.View.extend({
         this.contactsCollection = new Backbone.Collection();
         this.defaultAcrValuesCollection = new Backbone.Collection();
         this.requestUrisCollection = new Backbone.Collection();
+        
+        this.listWidgetViews = [];
 	},
 	
 	load:function(callback) {
@@ -151,7 +167,7 @@ var ResRegEditView = Backbone.View.extend({
     	}
 
     	$('#loadingbox').sheet('show');
-    	$('#loading').html('<span class="label" id="loading-scopes">Scopes</span> ');
+    	$('#loading').html('<span class="label" id="loading-scopes">' + $.t('common.scopes') + '</span> ');
 
     	$.when(this.options.systemScopeList.fetchIfNeeded({success:function(e) {$('#loading-scopes').addClass('label-success');}}))
     	.done(function() {
@@ -165,7 +181,8 @@ var ResRegEditView = Backbone.View.extend({
         "click .btn-cancel":"cancel",
         "click .btn-delete":"deleteClient",
         "change #logoUri input":"previewLogo",
-        "change #tokenEndpointAuthMethod input:radio":"toggleClientCredentials"
+        "change #tokenEndpointAuthMethod input:radio":"toggleClientCredentials",
+        "change #jwkSelector input:radio":"toggleJWKSetType"
     },
 
     cancel:function(e) {
@@ -176,10 +193,11 @@ var ResRegEditView = Backbone.View.extend({
     deleteClient:function (e) {
     	e.preventDefault();
 
-        if (confirm("Are you sure sure you would like to delete this client?")) {
+        if (confirm($.t('client.client-table.confirm'))) {
             var self = this;
 
             this.model.destroy({
+            	dataType: false, processData: false,
                 success:function () {
                 	self.remove();
                 	app.navigate('dev/resource', {trigger: true});
@@ -234,6 +252,25 @@ var ResRegEditView = Backbone.View.extend({
         }
     },
     
+    /**
+     * Set up the form based on the JWK Set selector 
+     */
+    toggleJWKSetType:function() {
+    	var jwkSelector = $('#jwkSelector input:radio', this.el).filter(':checked').val();
+    	
+    	if (jwkSelector == 'URI') {
+    		$('#jwksUri', this.el).show();
+    		$('#jwks', this.el).hide();
+    	} else if (jwkSelector == 'VAL') {
+    		$('#jwksUri', this.el).hide();
+    		$('#jwks', this.el).show();
+    	} else {
+    		$('#jwksUri', this.el).hide();
+    		$('#jwks', this.el).hide();
+    	}
+    	
+    },
+
     disableUnsupportedJOSEItems:function(serverSupported, query) {
         var supported = ['default'];
         if (serverSupported) {
@@ -263,6 +300,11 @@ var ResRegEditView = Backbone.View.extend({
 
         $('.control-group').removeClass('error');
 
+        // sync any leftover collection items
+        _.each(this.listWidgetViews, function(v) {
+        	v.addItem($.Event('click'));
+        });
+        
         // build the scope object
         var scopes = this.scopeCollection.pluck("item").join(" ");
         
@@ -274,6 +316,38 @@ var ResRegEditView = Backbone.View.extend({
         	}
         }
 
+        // process the JWKS
+        var jwksUri = null;
+        var jwks = null;
+        var jwkSelector = $('#jwkSelector input:radio', this.el).filter(':checked').val();
+    	
+    	if (jwkSelector == 'URI') {
+            jwksUri = $('#jwksUri input').val();
+    		jwks = null;
+    	} else if (jwkSelector == 'VAL') {
+    		jwksUri = null;
+    		try {
+    			jwks = JSON.parse($('#jwks textarea').val());
+    		} catch (e) {
+        		console.log("An error occurred when parsing the JWK Set");
+
+        		//Display an alert with an error message
+				$('#modalAlert div.modal-header').html("JWK Set Error");
+        		$('#modalAlert div.modal-body').html("There was an error parsing the public key from the JSON Web Key set. Check the value and try again.");
+        		
+    			 $("#modalAlert").modal({ // wire up the actual modal functionality and show the dialog
+    				 "backdrop" : "static",
+    				 "keyboard" : true,
+    				 "show" : true // ensure the modal is shown immediately
+    			 });
+    			 
+    			 return false;
+    		}
+    	} else {
+    		jwksUri = null;
+    		jwks = null;
+    	}
+
         var attrs = {
             client_name:$('#clientName input').val(),
             logo_uri:$('#logoUri input').val(),
@@ -283,7 +357,8 @@ var ResRegEditView = Backbone.View.extend({
             policy_uri: $('#policyUri input').val(),
             client_uri: $('#clientUri input').val(),
             application_type: $('#applicationType input').filter(':checked').val(),
-            jwks_uri: $('#jwksUri input').val(),
+            jwks_uri: jwksUri,
+            jwks: jwks,
             token_endpoint_auth_method: $('#tokenEndpointAuthMethod input').filter(':checked').val(),
             contacts: contacts,
             token_endpoint_auth_signing_alg: this.defaultToNull($('#tokenEndpointAuthSigningAlg select').val())
@@ -302,6 +377,17 @@ var ResRegEditView = Backbone.View.extend({
             	// switch to an "edit" view
             	app.navigate('dev/resource/edit', {trigger: true});
             	_self.remove();
+
+            	if (_self.model.get("jwks")) {
+    	        	_self.model.set({
+    	        		jwksType: "VAL"
+    	        	}, { silent: true });
+    	        } else {
+    	        	_self.model.set({
+    	        		jwksType: "URI"
+    	        	}, { silent: true });
+    	        }
+        		
     			var view = new ResRegEditView({model: _self.model, systemScopeList: _self.options.systemScopeList});
     			
     			view.load(function() {
@@ -334,18 +420,10 @@ var ResRegEditView = Backbone.View.extend({
     render:function() {
 		$(this.el).html(this.template({client: this.model.toJSON(), userInfo: getUserInfo()}));
 		
-        var _self = this;
+		this.listWidgetViews = [];
+		
+		var _self = this;
 
-        // build and bind registered redirect URI collection and view
-        _.each(this.model.get("redirectUris"), function (redirectUri) {
-            _self.redirectUrisCollection.add(new URIModel({item:redirectUri}));
-        });
-
-        $("#redirectUris .controls",this.el).html(new ListWidgetView({
-        	type:'uri', 
-        	placeholder: 'https://',
-        	collection: this.redirectUrisCollection}).render().el);
-        
         // build and bind scopes
         var scopes = this.model.get("scope");
         var scopeSet = scopes ? scopes.split(" ") : [];
@@ -353,63 +431,42 @@ var ResRegEditView = Backbone.View.extend({
             _self.scopeCollection.add(new Backbone.Model({item:scope}));
         });
 
-        $("#scope .controls",this.el).html(new ListWidgetView({
-        	placeholder: 'new scope', 
-        	autocomplete: _.uniq(_.flatten(this.options.systemScopeList.pluck("value"))), 
-            collection: this.scopeCollection}).render().el);
+        var scopeView = new ListWidgetView({
+        	placeholder: $.t('client.client-form.scope-placeholder'), 
+        	autocomplete: _.uniq(_.flatten(this.options.systemScopeList.unrestrictedScopes().pluck("value"))), 
+        	helpBlockText: $.t('rsreg.client-form.scope-help'),
+            collection: this.scopeCollection});
+        $("#scope .controls",this.el).html(scopeView.render().el);
+        this.listWidgetViews.push(scopeView);
 
         // build and bind contacts
         _.each(this.model.get('contacts'), function (contact) {
         	_self.contactsCollection.add(new Backbone.Model({item:contact}));
         });
         
-        $("#contacts .controls div", this.el).html(new ListWidgetView({
-        	placeholder: 'new contact',
-        	collection: this.contactsCollection}).render().el);
+        var contactView = new ListWidgetView({
+        	placeholder: $.t('client.client-form.contacts-placeholder'),
+        	helpBlockText: $.t('client.client-form.contacts-help'),
+        	collection: this.contactsCollection});
+        $("#contacts .controls", this.el).html(contactView.render().el);
+        this.listWidgetViews.push(contactView);
         
         
-        // build and bind request URIs
-        _.each(this.model.get('requestUris'), function (requestUri) {
-        	_self.requestUrisCollection.add(new URIModel({item:requestUri}));
-        });
-        
-        $('#requestUris .controls', this.el).html(new ListWidgetView({
-        	type: 'uri',
-        	placeholder: 'https://',
-        	collection: this.requestUrisCollection}).render().el);
-        
-        // build and bind default ACR values
-        _.each(this.model.get('defaultAcrValues'), function (defaultAcrValue) {
-        	_self.defaultAcrValuesCollection.add(new Backbone.Model({item:defaultAcrValue}));
-        });
-        
-        $('#defaultAcrValues .controls', this.el).html(new ListWidgetView({
-        	placeholder: 'new ACR value',
-        	// TODO: autocomplete from spec
-        	collection: this.defaultAcrValuesCollection}).render().el);
-
         this.toggleClientCredentials();
         this.previewLogo();
+        this.toggleJWKSetType();
         
         // disable unsupported JOSE algorithms
-        this.disableUnsupportedJOSEItems(app.serverConfiguration.request_object_signing_alg_values_supported, '#requestObjectSigningAlg option');
-        this.disableUnsupportedJOSEItems(app.serverConfiguration.userinfo_signing_alg_values_supported, '#userInfoSignedResponseAlg option');
-        this.disableUnsupportedJOSEItems(app.serverConfiguration.userinfo_encryption_alg_values_supported, '#userInfoEncryptedResponseAlg option');
-        this.disableUnsupportedJOSEItems(app.serverConfiguration.userinfo_encryption_enc_values_supported, '#userInfoEncryptedResponseEnc option');
-        this.disableUnsupportedJOSEItems(app.serverConfiguration.id_token_signing_alg_values_supported, '#idTokenSignedResponseAlg option');
-        this.disableUnsupportedJOSEItems(app.serverConfiguration.id_token_encryption_alg_values_supported, '#idTokenEncryptedResponseAlg option');
-        this.disableUnsupportedJOSEItems(app.serverConfiguration.id_token_encryption_enc_values_supported, '#idTokenEncryptedResponseEnc option');
         this.disableUnsupportedJOSEItems(app.serverConfiguration.token_endpoint_auth_signing_alg_values_supported, '#tokenEndpointAuthSigningAlg option');
         
         this.$('.nyi').clickover({
         	placement: 'right', 
-        	title: 'Not Yet Implemented', 
-        	content: 'The value of this field will be saved with the client, '
-        		+'but the server does not currently process anything with it. '
-        		+'Future versions of the server library will make use of this.'
+            title: $.t('common.not-yet-implemented'),
+            content: $.t('common.not-yet-implemented-content')
         	});
         
 
+        $(this.el).i18n();
         return this;
 	}
 	

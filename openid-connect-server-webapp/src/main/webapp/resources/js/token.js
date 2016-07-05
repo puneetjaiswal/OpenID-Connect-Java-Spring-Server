@@ -1,19 +1,19 @@
 /*******************************************************************************
- * Copyright 2014 The MITRE Corporation 
- *   and the MIT Kerberos and Internet Trust Consortium
- * 
+ * Copyright 2016 The MITRE Corporation
+ *   and the MIT Internet Trust Consortium
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *   http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- ******************************************************************************/
+ *******************************************************************************/
 
 var AccessTokenModel = Backbone.Model.extend({
 	idAttribute: 'id',
@@ -94,17 +94,19 @@ var AccessTokenView = Backbone.View.extend({
 		
         $('.client-more-info-block', this.el).html(this.moreInfoTemplate({client: this.options.client.toJSON()}));
 
+        $(this.el).i18n();
         return this;
     },
     
     deleteToken:function (e) {
     	e.preventDefault();
 
-        if (confirm("Are you sure sure you would like to revoke this token?")) {
+        if (confirm($.t("token.token-table.confirm"))) {
         	
             var _self = this;
 
             this.model.destroy({
+            	dataType: false, processData: false,
                 success:function () {
                 	
                     _self.$el.fadeTo("fast", 0.00, function () { //fade
@@ -231,7 +233,7 @@ var RefreshTokenView = Backbone.View.extend({
 			expirationDate = moment(expirationDate).calendar();
 		}
     	
-		var json = {token: this.model.toJSON(), client: this.options.client.toJSON(), formattedExpiration: expirationDate};
+		var json = {token: this.model.toJSON(), client: this.options.client.toJSON(), formattedExpiration: expirationDate, accessTokenCount: this.options.accessTokenCount};
 
 		this.$el.html(this.template(json));
 
@@ -243,6 +245,7 @@ var RefreshTokenView = Backbone.View.extend({
 		
         $('.client-more-info-block', this.el).html(this.moreInfoTemplate({client: this.options.client.toJSON()}));
         
+        $(this.el).i18n();
         return this;
 
     },
@@ -250,11 +253,12 @@ var RefreshTokenView = Backbone.View.extend({
     deleteToken:function (e) {
     	e.preventDefault();
 
-        if (confirm("Are you sure sure you would like to revoke this refresh token and its associated access tokens?")) {
+        if (confirm($.t('token.token-table.confirm-refresh'))) {
         	
             var _self = this;
 
             this.model.destroy({
+            	dataType: false, processData: false,
                 success:function () {
                 	
                     _self.$el.fadeTo("fast", 0.00, function () { //fade
@@ -339,10 +343,11 @@ var TokenListView = Backbone.View.extend({
     	}
 
     	$('#loadingbox').sheet('show');
-    	$('#loading').html('<span class="label" id="loading-access">Access Tokens</span> ' +
-    			'<span class="label" id="loading-refresh">Refresh Tokens</span> ' + 
-    			'<span class="label" id="loading-clients">Clients</span> ' + 
-    			'<span class="label" id="loading-scopes">Scopes</span> '
+    	$('#loading').html(
+                '<span class="label" id="loading-access">' + $.t('token.token-table.access-tokens') + '</span> ' +
+    			'<span class="label" id="loading-refresh">' + $.t('token.token-table.refresh-tokens') + '</span> ' +
+                '<span class="label" id="loading-clients">' + $.t('common.clients') + '</span> ' +
+                '<span class="label" id="loading-scopes">' + $.t('common.scopes') + '</span> '
     			);
 
     	$.when(this.model.access.fetchIfNeeded({success:function(e) {$('#loading-access').addClass('label-success');}}),
@@ -380,10 +385,11 @@ var TokenListView = Backbone.View.extend({
 	
     refreshTable:function(e) {
     	$('#loadingbox').sheet('show');
-    	$('#loading').html('<span class="label" id="loading-access">Access Tokens</span> ' +
-    			'<span class="label" id="loading-refresh">Refresh Tokens</span> ' + 
-    			'<span class="label" id="loading-clients">Clients</span> ' + 
-    			'<span class="label" id="loading-scopes">Scopes</span> '
+    	$('#loading').html(
+                '<span class="label" id="loading-access">' + $.t('token.token-table.access-tokens') + '</span> ' +
+                '<span class="label" id="loading-refresh">' + $.t('token.token-table.refresh-tokens') + '</span> ' +
+                '<span class="label" id="loading-clients">' + $.t('common.clients') + '</span> ' +
+                '<span class="label" id="loading-scopes">' + $.t('common.scopes') + '</span> '
     			);
     	var _self = this;
     	$.when(this.model.access.fetch({success:function(e) {$('#loading-access').addClass('label-success');}}),
@@ -420,7 +426,7 @@ var TokenListView = Backbone.View.extend({
 		
 		// append and render the table structure
 		$(this.el).html($('#tmpl-token-table').html());
-	
+		
 		var _self = this;
 		
         // set up pagination
@@ -435,6 +441,9 @@ var TokenListView = Backbone.View.extend({
         	$('.paginator-access', this.el).hide();
         }
 
+        // count up refresh tokens
+        var refreshCount = {};
+        
         _.each(this.model.access.models, function (token, index) {
 			// look up client
 			var client = _self.options.clientList.getByClientId(token.get('clientId'));
@@ -445,9 +454,22 @@ var TokenListView = Backbone.View.extend({
             if (Math.ceil((index + 1) / 10) != 1) {
             	$(element).hide();
             }
+            
+            //console.log(token.get('refreshTokenId'));
+            var refId = token.get('refreshTokenId');
+            if (refId != null) {
+            	if (refreshCount[refId]) {
+            		refreshCount[refId] += 1;
+            	} else {
+            		refreshCount[refId] = 1;
+            	}
+            	
+            }
 
 		});
-		
+
+        //console.log(refreshCount);
+        
         // set up pagination
         var numPagesRefresh = Math.ceil(this.model.refresh.length / 10);
         if (numPagesRefresh > 1) {
@@ -463,7 +485,7 @@ var TokenListView = Backbone.View.extend({
         _.each(this.model.refresh.models, function (token, index) {
 			// look up client
 			var client = _self.options.clientList.getByClientId(token.get('clientId'));
-			var view = new RefreshTokenView({model: token, client: client, systemScopeList: _self.options.systemScopeList});
+			var view = new RefreshTokenView({model: token, client: client, systemScopeList: _self.options.systemScopeList, accessTokenCount: refreshCount[token.get('id')]});
 			view.parentView = _self;
 			var element = view.render().el;
 			$('#refresh-token-table', _self.el).append(element);
@@ -480,8 +502,7 @@ var TokenListView = Backbone.View.extend({
 */
 		
 		this.togglePlaceholder();
-		
+        $(this.el).i18n();
 		return this;
 	}
 });
-

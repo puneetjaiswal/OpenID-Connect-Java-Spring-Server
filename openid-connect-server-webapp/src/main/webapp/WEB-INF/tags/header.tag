@@ -1,9 +1,10 @@
 <%@attribute name="title" required="false"%>
 <%@ taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions"%>
 <%@ taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core"%>
+<%@ taglib prefix="spring" uri="http://www.springframework.org/tags"%>
 <%@ tag import="com.google.gson.Gson" %>
 <!DOCTYPE html>
-<html lang="en">
+<html lang="${pageContext.response.locale}">
 <head>
 
     <base href="${config.issuer}">
@@ -18,12 +19,14 @@
     <link href="resources/bootstrap2/css/bootstrap.css" rel="stylesheet">
     <link href="resources/css/bootstrap-sheet.css" rel="stylesheet">
     <link href="resources/css/mitreid-connect.css" rel="stylesheet">
+    <link href="resources/css/mitreid-connect-local.css" rel="stylesheet">
     <link href="resources/bootstrap2/css/bootstrap-responsive.css" rel="stylesheet">
     <link href="resources/css/mitreid-connect-responsive.css" rel="stylesheet">
+    <link href="resources/css/mitreid-connect-responsive-local.css" rel="stylesheet">
 
     <!-- HTML5 shim, for IE6-8 support of HTML5 elements -->
     <!--[if lt IE 9]>
-    <script src="http://html5shim.googlecode.com/svn/trunk/html5.js"></script>
+    <script src="resources/js/lib/html5.js"></script>
     <![endif]-->
 
     <!-- favico -->
@@ -31,7 +34,20 @@
 
     <!-- Load jQuery up here so that we can use in-page functions -->
     <script type="text/javascript" src="resources/js/lib/jquery.js"></script>
+    <script type="text/javascript" charset="UTF-8" src="resources/js/lib/moment-with-locales.js"></script>
+    <script type="text/javascript" src="resources/js/lib/i18next.js"></script>
     <script type="text/javascript">
+        $.i18n.init({
+            fallbackLng: "en",
+            lng: "${config.locale}",
+            resGetPath: "resources/js/locale/__lng__/__ns__.json",
+            ns: {
+            	namespaces: ${config.languageNamespacesString},
+            	defaultNs: '${config.defaultLanguageNamespace}'
+            },
+            fallbackNS: ${config.languageNamespacesString}
+        });
+        moment.locale("${config.locale}");
     	// safely set the title of the application
     	function setPageTitle(title) {
     		document.title = "${config.topbarTitle} - " + title;
@@ -57,6 +73,9 @@
 				return false;
 			}
 		}
+		
+		var heartMode = ${config.heartMode};
+		
     </script>    
 </head>
 

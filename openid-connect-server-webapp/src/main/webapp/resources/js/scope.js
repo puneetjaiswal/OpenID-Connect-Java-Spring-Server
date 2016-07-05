@@ -1,19 +1,19 @@
 /*******************************************************************************
- * Copyright 2014 The MITRE Corporation 
- *   and the MIT Kerberos and Internet Trust Consortium
- * 
+ * Copyright 2016 The MITRE Corporation
+ *   and the MIT Internet Trust Consortium
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *   http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- ******************************************************************************/
+ *******************************************************************************/
 var SystemScopeModel = Backbone.Model.extend({
 	idAttribute: 'id',
 
@@ -23,7 +23,7 @@ var SystemScopeModel = Backbone.Model.extend({
 		icon:null,
 		value:null,
 		defaultScope:false,
-		allowDynReg:false,
+		restricted:false,
 		structured:false,
 		structuredParamDescription:null,
 		structuredValue:null
@@ -46,18 +46,18 @@ var SystemScopeCollection = Backbone.Collection.extend({
 		return new SystemScopeCollection(filtered);
 	},
 	
-	dynRegScopes: function() {
+	unrestrictedScopes: function() {
 		filtered = this.filter(function(scope) {
-			return scope.get("allowDynReg") === true;
+			return scope.get("restricted") !== true;
 		});
 		return new SystemScopeCollection(filtered);
 	},
 	
-	defaultDynRegScopes: function() {
+	defaultUnrestrictedScopes: function() {
 		filtered = this.filter(function(scope) {
-			return scope.get("defaultScope") === true && scope.get("allowDynReg") === true;
+			return scope.get("defaultScope") === true && scope.get("restricted") !== true;
 		});
-		return new SystemScopeCollection(filtered);		
+		return new SystemScopeCollection(filtered);
 	},
 	
 	getByValue: function(value) {
@@ -99,18 +99,21 @@ var SystemScopeView = Backbone.View.extend({
     render:function (eventName) {
         this.$el.html(this.template(this.model.toJSON()));
 
-        this.$('.allow-dyn-reg').tooltip({title: 'This scope can be used by dynamically registered clients'});
+        $('.restricted', this.el).tooltip({title: $.t('scope.system-scope-table.tooltip-restricted')});
+        $('.default', this.el).tooltip({title: $.t('scope.system-scope-table.tooltip-default')});
         
         return this;
+        $(this.el).i18n();
     },
     
     deleteScope:function (e) {
     	e.preventDefault();
 
-        if (confirm("Are you sure sure you would like to delete this scope? Clients that have this scope will still be able to ask for it.")) {
+        if (confirm($.t("scope.system-scope-table.confirm"))) {
             var _self = this;
 
             this.model.destroy({
+            	dataType: false, processData: false,
                 success:function () {
                 	
                     _self.$el.fadeTo("fast", 0.00, function () { //fade
@@ -163,7 +166,9 @@ var SystemScopeListView = Backbone.View.extend({
     	}
 
     	$('#loadingbox').sheet('show');
-    	$('#loading').html('<span class="label" id="loading-scopes">Scopes</span> ');
+    	$('#loading').html(
+                '<span class="label" id="loading-scopes">' + $.t('common.scopes') + '</span> '
+    	        );
 
     	$.when(this.model.fetchIfNeeded({success:function(e) {$('#loading-scopes').addClass('label-success');}}))
     	.done(function() {
@@ -185,7 +190,9 @@ var SystemScopeListView = Backbone.View.extend({
 	refreshTable:function(e) {
 		var _self = this;
     	$('#loadingbox').sheet('show');
-    	$('#loading').html('<span class="label" id="loading-scopes">Scopes</span> ');
+    	$('#loading').html(
+                '<span class="label" id="loading-scopes">' + $.t('common.scopes') + '</span> '
+    	        );
 
     	$.when(this.model.fetch({success:function(e) {$('#loading-scopes').addClass('label-success');}}))
     	.done(function() {
@@ -218,7 +225,7 @@ var SystemScopeListView = Backbone.View.extend({
 		}, this);
 		
 		this.togglePlaceholder();
-		
+        $(this.el).i18n();
 		return this;
 	}
 });
@@ -239,30 +246,29 @@ var SystemScopeFormView = Backbone.View.extend({
 		if (!this.bootstrapIcons) {
 			this.bootstrapIcons = [];
 			
-    		var iconList = ['glass', 'music', 'search', 'envelope', 'heart', 'star',
-    		                'star-empty', 'user', 'film', 'th-large', 'th', 'th-list', 'ok',
-    		                'remove', 'zoom-in', 'zoom-out', 'off', 'signal', 'cog', 'trash',
-    		                'home', 'file', 'time', 'road', 'download-alt', 'download',
-    		                'upload', 'inbox', 'play-circle', 'repeat', 'refresh', 'list-alt',
-    		                'lock', 'flag', 'headphones', 'volume-off', 'volume-down',
-    		                'volume-up', 'qrcode', 'barcode', 'tag', 'tags', 'book',
-                			'bookmark', 'print', 'camera', 'font', 'bold', 'italic',
-                			'text-height', 'text-width', 'align-left', 'align-center',
-                			'align-right', 'align-justify', 'list', 'indent-left',
-                			'indent-right', 'facetime-video', 'picture', 'pencil',
-                			'map-marker', 'tint', 'share', 'move', 'fast-backward', 'backward',
-                			'pause', 'stop', 'forward', 'step-forward', 'eject',
-                			'chevron-right', 'plus-sign', 'minus-sign', 'remove-sign',
-                			'ok-sign', 'question-sign', 'info-sign', 'screenshot',
-                			'remove-circle', 'ok-circle', 'ban-circle', 'arrow-left',
-                			'arrow-right', 'arrow-down', 'share-alt', 'resize-full',
-                			'resize-small', 'plus', 'asterisk', 'exclamation-sign', 'gift',
-                			'leaf', 'fire', 'eye-close', 'plane', 'random', 'magnet',
-                			'chevron-up', 'chevron-down', 'retweet', 'shopping-cart',
-                			'folder-close', 'folder-open', 'resize-vertical',
-                			'resize-horizontal', 'hdd', 'bell', 'thumbs-up', 'hand-right',
-                			'hand-left', 'hand-down', 'circle-arrow-left', 'circle-arrow-up',
-                			'circle-arrow-down', 'globe', 'tasks', 'briefcase' ];
+    		var iconList = ['glass', 'music', 'search', 'envelope', 'heart', 'star', 'star-empty', 
+    		                'user', 'film', 'th-large', 'th', 'th-list', 'ok', 'remove', 'zoom-in', 
+    		                'zoom-out', 'off', 'signal', 'cog', 'trash', 'home', 'file', 'time', 'road', 
+    		                'download-alt', 'download', 'upload', 'inbox', 'play-circle', 'repeat', 
+    		                'refresh', 'list-alt', 'lock', 'flag', 'headphones', 'volume-off', 
+    		                'volume-down', 'volume-up', 'qrcode', 'barcode', 'tag', 'tags', 'book', 
+    		                'bookmark', 'print', 'camera', 'font', 'bold', 'italic', 'text-height', 
+    		                'text-width', 'align-left', 'align-center', 'align-right', 'align-justify', 
+    		                'list', 'indent-left', 'indent-right', 'facetime-video', 'picture', 'pencil', 
+    		                'map-marker', 'adjust', 'tint', 'edit', 'share', 'check', 'move', 'step-backward', 
+    		                'fast-backward', 'backward', 'play', 'pause', 'stop', 'forward', 'fast-forward', 
+    		                'step-forward', 'eject', 'chevron-left', 'chevron-right', 'plus-sign', 
+    		                'minus-sign', 'remove-sign', 'ok-sign', 'question-sign', 'info-sign', 
+    		                'screenshot', 'remove-circle', 'ok-circle', 'ban-circle', 'arrow-left', 
+    		                'arrow-right', 'arrow-up', 'arrow-down', 'share-alt', 'resize-full', 'resize-small', 
+    		                'plus', 'minus', 'asterisk', 'exclamation-sign', 'gift', 'leaf', 'fire', 
+    		                'eye-open', 'eye-close', 'warning-sign', 'plane', 'calendar', 'random', 
+    		                'comment', 'magnet', 'chevron-up', 'chevron-down', 'retweet', 'shopping-cart', 
+    		                'folder-close', 'folder-open', 'resize-vertical', 'resize-horizontal', 
+    		                'hdd', 'bullhorn', 'bell', 'certificate', 'thumbs-up', 'thumbs-down', 
+    		                'hand-right', 'hand-left', 'hand-up', 'hand-down', 'circle-arrow-right', 
+    		                'circle-arrow-left', 'circle-arrow-up', 'circle-arrow-down', 'globe', 
+    		                'wrench', 'tasks', 'filter', 'briefcase', 'fullscreen'];
     		
     		var size = 3;
     		while (iconList.length > 0) {
@@ -277,6 +283,25 @@ var SystemScopeFormView = Backbone.View.extend({
 		'click .btn-cancel': function() {app.navigate('admin/scope', {trigger: true}); },
 		'click .btn-icon':'selectIcon',
 		'change #isStructured input':'toggleStructuredParamDescription'
+	},
+	
+	load:function(callback) {
+		if (this.model.isFetched) {
+			callback();
+			return;
+		}
+		
+    	$('#loadingbox').sheet('show');
+        $('#loading').html(
+                '<span class="label" id="loading-scopes">' + $.t("common.scopes") + '</span> '
+                );
+
+    	$.when(this.model.fetchIfNeeded({success:function(e) {$('#loading-scopes').addClass('label-success');}}))
+    			.done(function() {
+    	    		$('#loadingbox').sheet('hide');
+    	    		callback();
+    			});
+		
 	},
 	
 	toggleStructuredParamDescription:function(e) {
@@ -302,7 +327,7 @@ var SystemScopeFormView = Backbone.View.extend({
 			description:$('#description textarea').val(),
 			icon:$('#iconDisplay input').val(),
 			defaultScope:$('#defaultScope input').is(':checked'),
-			allowDynReg:$('#allowDynReg input').is(':checked'),
+			restricted:$('#restricted input').is(':checked'),
 			structured:$('#isStructured input').is(':checked'),
 			structuredParamDescription:$('#structuredParamDescription input').val()
 		});
@@ -342,9 +367,10 @@ var SystemScopeFormView = Backbone.View.extend({
 		var icon = e.target.value;
 		
 		$('#iconDisplay input').val(icon);
-		$('#iconDisplay span').html(icon);
+		$('#iconDisplay #iconName').html(icon);
 		$('#iconDisplay i').removeClass();
 		$('#iconDisplay i').addClass('icon-' + icon);
+		$('#iconDisplay i').addClass('icon-white');
 		
 		$('#iconSelector').modal('hide');
 		
@@ -355,12 +381,11 @@ var SystemScopeFormView = Backbone.View.extend({
 		this.$el.html(this.template(this.model.toJSON()));
 		
 		_.each(this.bootstrapIcons, function (items) {
-			$(".modal-body", this.el).append(this.iconTemplate({items:items}));
+			$("#iconSelector .modal-body", this.el).append(this.iconTemplate({items:items}));
 		}, this);
 		
 		this.toggleStructuredParamDescription();
-		
+        $(this.el).i18n();
 		return this;
 	}
 });
-

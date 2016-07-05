@@ -1,19 +1,19 @@
 /*******************************************************************************
- * Copyright 2014 The MITRE Corporation
- *   and the MIT Kerberos and Internet Trust Consortium
- * 
+ * Copyright 2016 The MITRE Corporation
+ *   and the MIT Internet Trust Consortium
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *   http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- ******************************************************************************/
+ *******************************************************************************/
 /**
  * 
  */
@@ -27,7 +27,7 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 
-import org.mitre.openid.connect.filter.PromptFilter;
+import org.mitre.openid.connect.filter.AuthorizationRequestFilter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.security.core.Authentication;
@@ -44,7 +44,10 @@ import org.springframework.stereotype.Component;
 @Component("authenticationTimeStamper")
 public class AuthenticationTimeStamper extends SavedRequestAwareAuthenticationSuccessHandler {
 
-	private static Logger logger = LoggerFactory.getLogger(AuthenticationTimeStamper.class);
+	/**
+	 * Logger for this class
+	 */
+	private static final Logger logger = LoggerFactory.getLogger(AuthenticationTimeStamper.class);
 
 	public static final String AUTH_TIMESTAMP = "AUTH_TIMESTAMP";
 
@@ -62,9 +65,9 @@ public class AuthenticationTimeStamper extends SavedRequestAwareAuthenticationSu
 
 		session.setAttribute(AUTH_TIMESTAMP, authTimestamp);
 
-		if (session.getAttribute(PromptFilter.PROMPT_REQUESTED) != null) {
-			session.setAttribute(PromptFilter.PROMPTED, Boolean.TRUE);
-			session.removeAttribute(PromptFilter.PROMPT_REQUESTED);
+		if (session.getAttribute(AuthorizationRequestFilter.PROMPT_REQUESTED) != null) {
+			session.setAttribute(AuthorizationRequestFilter.PROMPTED, Boolean.TRUE);
+			session.removeAttribute(AuthorizationRequestFilter.PROMPT_REQUESTED);
 		}
 
 		logger.info("Successful Authentication of " + authentication.getName() + " at " + authTimestamp.toString());

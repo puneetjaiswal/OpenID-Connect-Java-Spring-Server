@@ -1,19 +1,19 @@
 /*******************************************************************************
- * Copyright 2014 The MITRE Corporation 
- *   and the MIT Kerberos and Internet Trust Consortium
- * 
+ * Copyright 2016 The MITRE Corporation
+ *   and the MIT Internet Trust Consortium
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *   http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- ******************************************************************************/
+ *******************************************************************************/
 var ClientModel = Backbone.Model.extend({
 
     idAttribute: "id",
@@ -47,7 +47,10 @@ var ClientModel = Backbone.Model.extend({
         grantTypes:[],
         responseTypes:[],
         policyUri:"",
+        
         jwksUri:"",
+        jwks:null,
+        jwksType:"URI",
         
         applicationType:null,
         sectorIdentifierUri:"",
@@ -70,7 +73,7 @@ var ClientModel = Backbone.Model.extend({
         defaultACRvalues:null,
         
         initiateLoginUri:"",
-        postLogoutRedirectUri:"",
+        postLogoutRedirectUris:[],
         
         requestUris:[],
         
@@ -80,12 +83,15 @@ var ClientModel = Backbone.Model.extend({
         resourceIds:[],
         //additionalInformation?
         
+        claimsRedirectUris:[],
+        
         clientDescription:"",
         reuseRefreshToken:true,
+        clearAccessTokensOnRefresh:true,
         dynamicallyRegistered:false,
         allowIntrospection:false,
         idTokenValiditySeconds: null,
-        createdAt:null,     
+        createdAt:null,
 
         allowRefresh:false,
         displayClientSecret: false,
@@ -95,35 +101,84 @@ var ClientModel = Backbone.Model.extend({
     urlRoot:"api/clients",
     
     matches:function(term) {
+    	
+    	var matches = [];
+    	
     	if (term) {
     		if (this.get('clientId').toLowerCase().indexOf(term.toLowerCase()) != -1) {
-    			return true;
-    		} else if (this.get('clientName') != null && this.get('clientName').toLowerCase().indexOf(term.toLowerCase()) != -1) {
-    			return true;
-    		} else if (this.get('clientDescription') != null && this.get('clientDescription').toLowerCase().indexOf(term.toLowerCase()) != -1) {
-    			return true;
-    		} else if (this.get('clientUri') != null && this.get('clientUri').toLowerCase().indexOf(term.toLowerCase()) != -1) {
-    			return true;
-    		} else {
-    			if (this.get('contacts') != null) {
-    				var f = _.filter(this.get('contacts'), function(item) {
-    					return item.toLowerCase().indexOf(term.toLowerCase()) != -1;
-    				});
-    				if (f.length > 0) {
-    					return true;
-    				} else {
-    					return false;
-    				}
-    			}  else {
-    				return false;
-    			}
+    			matches.push($.t('client.client-table.match.id'));
+    		} 
+    		if (this.get('clientName') != null && this.get('clientName').toLowerCase().indexOf(term.toLowerCase()) != -1) {
+    			matches.push($.t('client.client-table.match.name'));
+    		} 
+    		if (this.get('clientDescription') != null && this.get('clientDescription').toLowerCase().indexOf(term.toLowerCase()) != -1) {
+    			matches.push($.t('client.client-table.match.description'));
+    		} 
+    		if (this.get('clientUri') != null && this.get('clientUri').toLowerCase().indexOf(term.toLowerCase()) != -1) {
+    			matches.push($.t('client.client-table.match.homepage'));
     		}
+    		if (this.get('policyUri') != null && this.get('policyUri').toLowerCase().indexOf(term.toLowerCase()) != -1) {
+    			matches.push($.t('client.client-table.match.policy'));
+    		}
+    		if (this.get('tosUri') != null && this.get('tosUri').toLowerCase().indexOf(term.toLowerCase()) != -1) {
+    			matches.push($.t('client.client-table.match.terms'));
+    		}
+    		if (this.get('logoUri') != null && this.get('logoUri').toLowerCase().indexOf(term.toLowerCase()) != -1) {
+    			matches.push($.t('client.client-table.match.logo'));
+    		}
+			if (this.get('contacts') != null) {
+				var f = _.filter(this.get('contacts'), function(item) {
+					return item.toLowerCase().indexOf(term.toLowerCase()) != -1;
+				});
+				if (f.length > 0) {
+					matches.push($.t('client.client-table.match.contacts'));
+				}
+			}
+			if (this.get('redirectUris') != null) {
+				var f = _.filter(this.get('redirectUris'), function (item) {
+					return item.toLowerCase().indexOf(term.toLowerCase()) != -1;
+				});
+				if (f.length > 0) {
+					matches.push($.t('client.client-table.match.redirect'));
+				}
+			}
+			if (this.get('scope') != null) {
+				var f = _.filter(this.get('scope'), function (item) {
+					return item.toLowerCase().indexOf(term.toLowerCase()) != -1;
+				});
+				if (f.length > 0) {
+					matches.push($.t('client.client-table.match.scope'));
+				}
+			}
     	} else {
-    		return true;
+    		// there's no search term, we always match
+    		
+	    	this.unset('matches', {silent: true});
+	    	//console.log('no term');
+	    	return true;
     	}
-
+    
+    	
+    	var matchString = matches.join(' | ');
+    	
+	    if (matches.length > 0) {
+	    	this.set({
+	    		matches: matchString
+	    	}, {silent: true});
+	    	
+	    	return true;
+	    } else {
+	    	this.unset('matches', {silent: true});
+	    	
+	    	return false;
+	    }
     }
 
+});
+
+var RegistrationTokenModel = Backbone.Model.extend({
+	idAttribute: 'clientId',
+	urlRoot: 'api/tokens/registration'
 });
 
 var ClientCollection = Backbone.Collection.extend({
@@ -153,7 +208,7 @@ var ClientView = Backbone.View.extend({
     	this.options = options;
 
         if (!this.template) {
-            this.template = _.template($('#tmpl-client').html());
+            this.template = _.template($('#tmpl-client-table-item').html());
         }
 
         if (!this.scopeTemplate) {
@@ -164,6 +219,10 @@ var ClientView = Backbone.View.extend({
         	this.moreInfoTemplate = _.template($('#tmpl-client-more-info-block').html());
         }
         
+        if (!this.registrationTokenTemplate) {
+        	this.registrationTokenTemplate = _.template($('#tmpl-client-registration-token').html());
+        }
+        
         this.model.bind('change', this.render, this);
         
     },
@@ -171,19 +230,19 @@ var ClientView = Backbone.View.extend({
     render:function (eventName) {
     	
     	var creationDate = this.model.get('createdAt');
-		var displayCreationDate = "at an unknown time";
+		var displayCreationDate = $.t('client.client-table.unknown');
 		var hoverCreationDate = "";
 		if (creationDate == null || !moment(creationDate).isValid()) {
-			displayCreationDate = "at an unknown time";
+			displayCreationDate = $.t('client.client-table.unknown');
 			hoverCreationDate = "";
 		} else {
 			creationDate = moment(creationDate);
 			if (moment().diff(creationDate, 'months') < 6) {
 				displayCreationDate = creationDate.fromNow();
 			} else {
-				displayCreationDate = "on " + creationDate.format("MMMM Do, YYYY");
+				displayCreationDate = "on " + creationDate.format("LL");
 			}
-			hoverCreationDate = creationDate.format("MMMM Do, YYYY [at] h:mmA");
+			hoverCreationDate = creationDate.format("LLL");
 		}
 
     	
@@ -197,10 +256,81 @@ var ClientView = Backbone.View.extend({
         
         $('.clientid-full', this.el).hide();
         
-        this.$('.dynamically-registered').tooltip({title: 'This client was dynamically registered'});
-        this.$('.allow-introspection').tooltip({title: 'This client can perform token introspection'});
+        this.$('.dynamically-registered').tooltip({title: $.t('client.client-table.dynamically-registered-tooltip')});
+        this.$('.allow-introspection').tooltip({title: $.t('client.client-table.allow-introspection-tooltip')});
         
+        this.updateMatched();
+        $(this.el).i18n();
         return this;
+    },
+    
+    showRegistrationToken:function(e) {
+    	e.preventDefault();
+
+    	$('#modalAlertLabel').html($.t('client.client-form.registration-access-token'));
+    	
+    	var token = new RegistrationTokenModel({clientId: this.model.get('clientId')});
+    	
+    	var _self = this;
+    	token.fetch({success:function() {
+	        	var savedModel = {
+	        		clientId: _self.model.get('clientId'),
+	        		registrationToken: token.get('value')
+	        	};
+	        	
+	        	$('#modalAlert .modal-body').html(_self.registrationTokenTemplate(savedModel));
+	        	
+	        	$('#modalAlert .modal-body #rotate-token').click(function(e) {
+	        		if (confirm($.t('client.client-form.rotate-registration-token-confirm'))) {
+		        		token.save(null, {success: function() {
+			    	        	console.log('token:' + token.get('value'));
+			    		        $('#modalAlert .modal-body #registrationToken').val(token.get('value'));
+			        		},
+			        		error: function() {
+			    	    		$('#modalAlert').i18n();
+			    	    		$('#modalAlert .modal-body').html($t('client.client-form.rotate-registration-token-error'));
+			    	    		$('#modalAlert').modal({
+			    	        		'backdrop': 'static',
+			    	        		'keyboard': true,
+			    	        		'show': true
+			    	        	});
+			        		}
+			        	});
+	        		}
+	        	});
+	        	
+	    		$('#modalAlert').i18n();
+	        	$('#modalAlert').modal({
+	        		'backdrop': 'static',
+	        		'keyboard': true,
+	        		'show': true
+	        	});
+	        	
+	    	},
+	    	error:function() {
+	    		$('#modalAlert').i18n();
+	    		$('#modalAlert .modal-body').html($t('client.client-form.registration-token-error'));
+	    		$('#modalAlert').modal({
+	        		'backdrop': 'static',
+	        		'keyboard': true,
+	        		'show': true
+	        	});
+	        	
+	    	}
+    	});
+    	
+    },
+    
+    updateMatched:function() {
+    	
+    	//console.log(this.model.get('matches'));
+    	
+    	if (this.model.get('matches')) {
+    		$('.matched', this.el).show();
+    		$('.matched span', this.el).html(this.model.get('matches'));
+    	} else {
+    		$('.matched', this.el).hide();
+    	}
     },
 
     events:{
@@ -208,7 +338,8 @@ var ClientView = Backbone.View.extend({
         "click .btn-delete":"deleteClient",
         "click .btn-whitelist":"whiteListClient",
 		'click .toggleMoreInformation': 'toggleMoreInformation',
-        "click .clientid-substring":"showClientId"
+        "click .clientid-substring":"showClientId",
+        "click .dynamically-registered": 'showRegistrationToken'
     },
 
     editClient:function (e) {
@@ -220,20 +351,21 @@ var ClientView = Backbone.View.extend({
     	e.preventDefault();
     	if (this.options.whiteList == null) {
     		// create a new one
-    		app.navigate('admin/whitelist/new/' + this.model.id, {trigger: true});
+    		app.navigate('admin/whitelist/new/' + this.model.get('id'), {trigger: true});
     	} else {
     		// edit the existing one
-    		app.navigate('admin/whitelist/' + whiteList.id, {trigger: true});
+    		app.navigate('admin/whitelist/' + this.options.whiteList.get('id'), {trigger: true});
     	}
     },
     
     deleteClient:function (e) {
     	e.preventDefault();
 
-        if (confirm("Are you sure sure you would like to delete this client?")) {
+        if (confirm($.t('client.client-table.confirm'))) {
             var _self = this;
 
             this.model.destroy({
+            	dataType: false, processData: false,
                 success:function () {
                     _self.$el.fadeTo("fast", 0.00, function () { //fade
                         $(this).slideUp("fast", function () { //slide up
@@ -314,11 +446,12 @@ var ClientListView = Backbone.View.extend({
     	}
     	
     	$('#loadingbox').sheet('show');
-    	$('#loading').html('<span class="label" id="loading-clients">Clients</span> ' +
-    			'<span class="label" id="loading-whitelist">Whitelist</span> ' + 
-    			'<span class="label" id="loading-scopes">Scopes</span> ' +
-    			'<span class="label" id="loading-stats">Statistics</span> ' 
-    			);
+        $('#loading').html(
+                '<span class="label" id="loading-clients">' + $.t("common.clients") + '</span> ' +
+                '<span class="label" id="loading-whitelist">' + $.t("whitelist.whitelist") + '</span> ' + 
+                '<span class="label" id="loading-scopes">' + $.t("common.scopes") + '</span> ' + 
+                '<span class="label" id="loading-stats">' + $.t("common.statistics") + '</span> ' 
+                );
 
     	$.when(this.model.fetchIfNeeded({success:function(e) {$('#loading-clients').addClass('label-success');}}),
     			this.options.whiteListList.fetchIfNeeded({success:function(e) {$('#loading-whitelist').addClass('label-success');}}),
@@ -351,7 +484,7 @@ var ClientListView = Backbone.View.extend({
         $(this.el).html($('#tmpl-client-table').html());
         
         this.renderInner();
-
+        $(this.el).i18n();
         return this;        
     },
     
@@ -385,6 +518,8 @@ var ClientListView = Backbone.View.extend({
         	$('.paginator', this.el).show();
         	$('.paginator', this.el).bootpag({
         		total: numPages,
+        		maxVisible: 10,
+        		leaps: false,
         		page: 1
         	});        	
         } else {
@@ -424,10 +559,11 @@ var ClientListView = Backbone.View.extend({
     refreshTable:function(e) {
     	e.preventDefault();
     	$('#loadingbox').sheet('show');
-    	$('#loading').html('<span class="label" id="loading-clients">Clients</span> ' +
-    			'<span class="label" id="loading-whitelist">Whitelist</span> ' + 
-    			'<span class="label" id="loading-scopes">Scopes</span> ' + 
-    			'<span class="label" id="loading-stats">Statistics</span> ' 
+    	$('#loading').html(
+    	        '<span class="label" id="loading-clients">' + $.t("common.clients") + '</span> ' +
+    			'<span class="label" id="loading-whitelist">' + $.t("whitelist.whitelist") + '</span> ' + 
+    			'<span class="label" id="loading-scopes">' + $.t("common.scopes") + '</span> ' + 
+    			'<span class="label" id="loading-stats">' + $.t("common.statistics") + '</span> ' 
     			);
 
     	var _self = this;
@@ -444,13 +580,9 @@ var ClientListView = Backbone.View.extend({
     searchTable:function(e) {
     	var term = $('.search-query', this.el).val();
     	
-    	if (term) {
-    		this.filteredModel = new ClientCollection(this.model.filter(function(client) {
-    			return client.matches(term);
-    		}));
-    	} else {
-    		this.filteredModel = this.model;
-    	}
+		this.filteredModel = new ClientCollection(this.model.filter(function(client) {
+			return client.matches(term);
+		}));
     	
     	// clear out the table
     	$('tbody', this.el).html('');
@@ -488,7 +620,12 @@ var ClientFormView = Backbone.View.extend({
         this.contactsCollection = new Backbone.Collection();
         this.defaultAcrValuesCollection = new Backbone.Collection();
         this.requestUrisCollection = new Backbone.Collection();
+        this.postLogoutRedirectUrisCollection = new Backbone.Collection();
+        this.claimsRedirectUrisCollection = new Backbone.Collection();
         // TODO: add Spring authorities collection and resource IDs collection?
+        
+        // collection of sub-views that need to be sync'd on save
+        this.listWidgetViews = [];
     },
 
     events:{
@@ -508,7 +645,8 @@ var ClientFormView = Backbone.View.extend({
         "change #tokenEndpointAuthMethod input:radio":"toggleClientCredentials",
         "change #displayClientSecret":"toggleDisplayClientSecret",
         "change #generateClientSecret":"toggleGenerateClientSecret",
-        "change #logoUri input":"previewLogo"
+        "change #logoUri input":"previewLogo",
+        "change #jwkSelector input:radio":"toggleJWKSetType"
     },
 
     cancel:function(e) {
@@ -517,20 +655,21 @@ var ClientFormView = Backbone.View.extend({
     },
     
 	load:function(callback) {
-    	if (this.options.systemScopeList.isFetched) {
-    		$('#loadingbox').sheet('hide');
+    	if (this.model.isFetched &&
+    			this.options.systemScopeList.isFetched) {
     		callback();
     		return;
     	}
 
-    	if (this.model.get('id') == null) {
-    		// only show the box if this is a new client, otherwise the box is already showing
-	    	$('#loadingbox').sheet('show');
-	    	$('#loading').html('<span class="label" id="loading-scopes">Scopes</span> ');
-    	}
-
-    	$.when(this.options.systemScopeList.fetchIfNeeded({success:function(e) {$('#loading-scopes').addClass('label-success');}}))
-    	.done(function() {
+    	$('#loadingbox').sheet('show');
+    	$('#loading').html(
+                '<span class="label" id="loading-clients">' + $.t('common.clients') + '</span> ' +
+    			'<span class="label" id="loading-scopes">' + $.t("common.scopes") + '</span> '
+    			);
+    	
+    	$.when(this.options.systemScopeList.fetchIfNeeded({success:function(e) {$('#loading-scopes').addClass('label-success');}}),
+    		    			this.model.fetchIfNeeded({success:function(e) {$('#loading-clients').addClass('label-success');}}))
+	    	.done(function() {
     	    		$('#loadingbox').sheet('hide');
     	    		callback();
     			});    	
@@ -578,6 +717,25 @@ var ClientFormView = Backbone.View.extend({
         } else {
         	$('#tokenEndpointAuthSigningAlg', this.el).hide();
         }
+    },
+    
+    /**
+     * Set up the form based on the JWK Set selector 
+     */
+    toggleJWKSetType:function() {
+    	var jwkSelector = $('#jwkSelector input:radio', this.el).filter(':checked').val();
+    	
+    	if (jwkSelector == 'URI') {
+    		$('#jwksUri', this.el).show();
+    		$('#jwks', this.el).hide();
+    	} else if (jwkSelector == 'VAL') {
+    		$('#jwksUri', this.el).hide();
+    		$('#jwks', this.el).show();
+    	} else {
+    		$('#jwksUri', this.el).hide();
+    		$('#jwks', this.el).hide();
+    	}
+    	
     },
     
     /**
@@ -680,6 +838,11 @@ var ClientFormView = Backbone.View.extend({
 
         $('.control-group').removeClass('error');
 
+        // sync any leftover collection items
+        _.each(this.listWidgetViews, function(v) {
+        	v.addItem($.Event('click'));
+        });
+        
         // build the scope object
         var scopes = this.scopeCollection.pluck("item");
         
@@ -748,12 +911,65 @@ var ClientFormView = Backbone.View.extend({
         	}
         }
         
+        // make sure that the subject identifier is consistent with the redirect URIs
+        var subjectType = $('#subjectType input').filter(':checked').val();
+        var redirectUris = this.redirectUrisCollection.pluck("item");
+        var sectorIdentifierUri = $('#sectorIdentifierUri input').val();
+        if (subjectType == 'PAIRWISE' && redirectUris.length > 1 && sectorIdentifierUri == '') {
+    		//Display an alert with an error message
+			$('#modalAlert div.modal-header').html("Consistency error");
+    		$('#modalAlert div.modal-body').html("Pairwise identifiers cannot be used with multiple redirect URIs unless a sector identifier URI is also registered.");
+    		
+			 $("#modalAlert").modal({ // wire up the actual modal functionality and show the dialog
+				 "backdrop" : "static",
+				 "keyboard" : true,
+				 "show" : true // ensure the modal is shown immediately
+			 });
+			 
+			 return false;
+      	
+        }
+        
+        // process the JWKS
+        var jwksUri = null;
+        var jwks = null;
+        var jwkSelector = $('#jwkSelector input:radio', this.el).filter(':checked').val();
+    	
+    	if (jwkSelector == 'URI') {
+            jwksUri = $('#jwksUri input').val();
+    		jwks = null;
+    	} else if (jwkSelector == 'VAL') {
+    		jwksUri = null;
+    		try {
+    			jwks = JSON.parse($('#jwks textarea').val());
+    		} catch (e) {
+        		console.log("An error occurred when parsing the JWK Set");
+
+        		//Display an alert with an error message
+				$('#modalAlert div.modal-header').html("JWK Set Error");
+        		$('#modalAlert div.modal-body').html("There was an error parsing the public key from the JSON Web Key set. Check the value and try again.");
+        		
+    			 $("#modalAlert").modal({ // wire up the actual modal functionality and show the dialog
+    				 "backdrop" : "static",
+    				 "keyboard" : true,
+    				 "show" : true // ensure the modal is shown immediately
+    			 });
+    			 
+    			 return false;
+    		}
+    	} else {
+    		jwksUri = null;
+    		jwks = null;
+    	}
+        
+        
+        
         var attrs = {
             clientName:$('#clientName input').val(),
             clientId:$('#clientId input').val(),
             clientSecret: clientSecret,
             generateClientSecret:generateClientSecret,
-            redirectUris: this.redirectUrisCollection.pluck("item"),
+            redirectUris: redirectUris,
             clientDescription:$('#clientDescription textarea').val(),
             logoUri:$('#logoUri input').val(),
             grantTypes: grantTypes,
@@ -767,14 +983,17 @@ var ClientFormView = Backbone.View.extend({
             policyUri: $('#policyUri input').val(),
             clientUri: $('#clientUri input').val(),
             applicationType: $('#applicationType input').filter(':checked').val(),
-            jwksUri: $('#jwksUri input').val(),
-            subjectType: $('#subjectType input').filter(':checked').val(),
+            jwksUri: jwksUri,
+            jwks: jwks,
+            subjectType: subjectType,
             tokenEndpointAuthMethod: tokenEndpointAuthMethod,
             responseTypes: responseTypes,
-            sectorIdentifierUri: $('#sectorIdentifierUri input').val(),
+            sectorIdentifierUri: sectorIdentifierUri,
             initiateLoginUri: $('#initiateLoginUri input').val(),
-            postLogoutRedirectUri: $('#postLogoutRedirectUri input').val(),
+            postLogoutRedirectUris: this.postLogoutRedirectUrisCollection.pluck('item'),
+            claimsRedirectUris: this.claimsRedirectUrisCollection.pluck('item'),
             reuseRefreshToken: $('#reuseRefreshToken').is(':checked'),
+            clearAccessTokensOnRefresh: $('#clearAccessTokensOnRefresh').is(':checked'),
             requireAuthTime: $('#requireAuthTime input').is(':checked'),
             defaultMaxAge: parseInt($('#defaultMaxAge input').val()),
             contacts: this.contactsCollection.pluck('item'),
@@ -814,7 +1033,7 @@ var ClientFormView = Backbone.View.extend({
         this.model.save(attrs, {
             success:function () {
 
-            	$('#modalAlertLabel').html('Client Saved');
+            	$('#modalAlertLabel').html($.t('client.client-form.saved.saved'));
             	
             	var savedModel = {
             		clientId: _self.model.get('clientId'),
@@ -832,6 +1051,7 @@ var ClientFormView = Backbone.View.extend({
             		$('#savedClientSecret').show();
             	});
             	
+            	$('#modalAlert').i18n();
             	$('#modalAlert').modal({
             		'backdrop': 'static',
             		'keyboard': true,
@@ -842,7 +1062,7 @@ var ClientFormView = Backbone.View.extend({
                 app.navigate('admin/clients', {trigger:true});
             },
             error:function (error, response) {
-        		console.log("An error occurred when deleting from a list widget");
+        		console.log("An error occurred when saving a client");
 
 				//Pull out the response text.
 				var responseJson = JSON.parse(response.responseText);
@@ -863,60 +1083,105 @@ var ClientFormView = Backbone.View.extend({
     },
 
     render:function (eventName) {
-
-        $(this.el).html(this.template(this.model.toJSON()));
+    	
+    	var data = {client: this.model.toJSON(), heartMode: heartMode};
+        $(this.el).html(this.template(data));
         
         var _self = this;
 
+        // clear the sub-view collection
+        this.listWidgetViews = [];
+        
         // build and bind registered redirect URI collection and view
         _.each(this.model.get("redirectUris"), function (redirectUri) {
             _self.redirectUrisCollection.add(new URIModel({item:redirectUri}));
         });
 
-        $("#redirectUris .controls",this.el).html(new ListWidgetView({
+        
+        var redirUriView = new ListWidgetView({
         	type:'uri', 
         	placeholder: 'https://',
-        	collection: this.redirectUrisCollection}).render().el);
+        	helpBlockText: $.t('client.client-form.redirect-uris-help'),
+        	collection: this.redirectUrisCollection});
+        $("#redirectUris .controls",this.el).html(redirUriView.render().el);
+        this.listWidgetViews.push(redirUriView);
         
         // build and bind scopes
         _.each(this.model.get("scope"), function (scope) {
             _self.scopeCollection.add(new Backbone.Model({item:scope}));
         });
 
-        $("#scope .controls",this.el).html(new ListWidgetView({
-        	placeholder: 'new scope', 
+        var scopeView = new ListWidgetView({
+        	placeholder: $.t('client.client-form.scope-placeholder'), 
         	autocomplete: _.uniq(_.flatten(this.options.systemScopeList.pluck("value"))), 
-            collection: this.scopeCollection}).render().el);
+        	helpBlockText: $.t('client.client-form.scope-help'),
+            collection: this.scopeCollection});
+        $("#scope .controls",this.el).html(scopeView.render().el);
+        this.listWidgetViews.push(scopeView);
 
         // build and bind contacts
         _.each(this.model.get('contacts'), function (contact) {
         	_self.contactsCollection.add(new Backbone.Model({item:contact}));
         });
         
-        $("#contacts .controls", this.el).html(new ListWidgetView({
-        	placeholder: 'new contact',
-        	collection: this.contactsCollection}).render().el);
+        var contactsView = new ListWidgetView({
+        	placeholder: $.t("client.client-form.contacts-placeholder"),
+        	helpBlockText: $.t("client.client-form.contacts-help"),
+        	collection: this.contactsCollection});
+        $("#contacts .controls", this.el).html(contactsView.render().el);
+        this.listWidgetViews.push(contactsView);
         
+        // build and bind post-logout redirect URIs
+        _.each(this.model.get('postLogoutRedirectUris'), function(postLogoutRedirectUri) {
+        	_self.postLogoutRedirectUrisCollection.add(new URIModel({item:postLogoutRedirectUri}));
+        });
+        
+        var postLogoutRedirectUrisView = new ListWidgetView({
+        	type: 'uri',
+        	placeholder: 'https://',
+        	helpBlockText: $.t('client.client-form.post-logout-help'),
+        	collection: this.postLogoutRedirectUrisCollection});
+        $('#postLogoutRedirectUris .controls', this.el).html(postLogoutRedirectUrisView.render().el);
+        this.listWidgetViews.push(postLogoutRedirectUrisView);
+        
+        // build and bind claims redirect URIs
+        _.each(this.model.get('claimsRedirectUris'), function(claimsRedirectUri) {
+        	_self.claimsRedirectUrisCollection.add(new URIModel({item:claimsRedirectUri}));
+        });
+        
+        var claimsRedirectUrisView = new ListWidgetView({
+        	type: 'uri',
+        	placeholder: 'https://',
+        	helpBlockText: $.t('client.client-form.claims-redirect-uris-help'),
+        	collection: this.claimsRedirectUrisCollection});
+        $('#claimsRedirectUris .controls', this.el).html(claimsRedirectUrisView.render().el);
+        this.listWidgetViews.push(claimsRedirectUrisView);
         
         // build and bind request URIs
         _.each(this.model.get('requestUris'), function (requestUri) {
         	_self.requestUrisCollection.add(new URIModel({item:requestUri}));
         });
         
-        $('#requestUris .controls', this.el).html(new ListWidgetView({
+        var requestUriView = new ListWidgetView({
         	type: 'uri',
         	placeholder: 'https://',
-        	collection: this.requestUrisCollection}).render().el);
+        	helpBlockText: $.t('client.client-form.request-uri-help'),
+        	collection: this.requestUrisCollection});
+        $('#requestUris .controls', this.el).html(requestUriView.render().el);
+        this.listWidgetViews.push(requestUriView);
         
         // build and bind default ACR values
         _.each(this.model.get('defaultAcrValues'), function (defaultAcrValue) {
         	_self.defaultAcrValuesCollection.add(new Backbone.Model({item:defaultAcrValue}));
         });
         
-        $('#defaultAcrValues .controls', this.el).html(new ListWidgetView({
-        	placeholder: 'new ACR value',
+        var defaultAcrView = new ListWidgetView({
+        	placeholder: $.t('client.client-form.acr-values-placeholder'),
         	// TODO: autocomplete from spec
-        	collection: this.defaultAcrValuesCollection}).render().el);
+        	helpBlockText: $.t('client.client-form.acr-values-help'),
+        	collection: this.defaultAcrValuesCollection});
+        $('#defaultAcrValues .controls', this.el).html(defaultAcrView.render().el);
+        this.listWidgetViews.push(defaultAcrView);
         
         // build and bind 
         
@@ -938,6 +1203,7 @@ var ClientFormView = Backbone.View.extend({
         // toggle other dynamic fields
         this.toggleClientCredentials();
         this.previewLogo();
+        this.toggleJWKSetType();
         
         // disable unsupported JOSE algorithms
         this.disableUnsupportedJOSEItems(app.serverConfiguration.request_object_signing_alg_values_supported, '#requestObjectSigningAlg option');
@@ -951,13 +1217,12 @@ var ClientFormView = Backbone.View.extend({
         
         this.$('.nyi').clickover({
         	placement: 'right', 
-        	title: 'Not Yet Implemented', 
-        	content: 'The value of this field will be saved with the client, '
-        		+'but the server does not currently process anything with it. '
-        		+'Future versions of the server library will make use of this.'
+        	title: $.t('common.not-yet-implemented'),
+        	content: $.t('common.not-yet-implemented-content')
         	});
         
-       return this;
+        $(this.el).i18n();
+        return this;
     }
 });
 

@@ -1,36 +1,45 @@
 /*******************************************************************************
- * Copyright 2014 The MITRE Corporation
- *   and the MIT Kerberos and Internet Trust Consortium
- * 
+ * Copyright 2016 The MITRE Corporation
+ *   and the MIT Internet Trust Consortium
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *   http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- ******************************************************************************/
+ *******************************************************************************/
 package org.mitre.discovery.web;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
 import org.mitre.discovery.util.WebfingerURLNormalizer;
-import org.mitre.jwt.encryption.service.JwtEncryptionAndDecryptionService;
-import org.mitre.jwt.signer.service.JwtSigningAndValidationService;
+import org.mitre.jwt.encryption.service.JWTEncryptionAndDecryptionService;
+import org.mitre.jwt.signer.service.JWTSigningAndValidationService;
 import org.mitre.oauth2.service.SystemScopeService;
+import org.mitre.oauth2.web.IntrospectionEndpoint;
+import org.mitre.oauth2.web.RevocationEndpoint;
 import org.mitre.openid.connect.config.ConfigurationPropertiesBean;
 import org.mitre.openid.connect.model.UserInfo;
 import org.mitre.openid.connect.service.UserInfoService;
+import org.mitre.openid.connect.view.HttpCodeView;
+import org.mitre.openid.connect.view.JsonEntityView;
+import org.mitre.openid.connect.web.DynamicClientRegistrationEndpoint;
+import org.mitre.openid.connect.web.JWKSetPublishingEndpoint;
+import org.mitre.openid.connect.web.UserInfoEndpoint;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -55,7 +64,14 @@ import com.nimbusds.jose.JWSAlgorithm;
 @Controller
 public class DiscoveryEndpoint {
 
-	private static Logger logger = LoggerFactory.getLogger(DiscoveryEndpoint.class);
+	public static final String WELL_KNOWN_URL = ".well-known";
+	public static final String OPENID_CONFIGURATION_URL = WELL_KNOWN_URL + "/openid-configuration";
+	public static final String WEBFINGER_URL = WELL_KNOWN_URL + "/webfinger";
+
+	/**
+	 * Logger for this class
+	 */
+	private static final Logger logger = LoggerFactory.getLogger(DiscoveryEndpoint.class);
 
 	@Autowired
 	private ConfigurationPropertiesBean config;
@@ -64,10 +80,10 @@ public class DiscoveryEndpoint {
 	private SystemScopeService scopeService;
 
 	@Autowired
-	private JwtSigningAndValidationService signService;
+	private JWTSigningAndValidationService signService;
 
 	@Autowired
-	private JwtEncryptionAndDecryptionService encService;
+	private JWTEncryptionAndDecryptionService encService;
 
 	@Autowired
 	private UserInfoService userService;
@@ -85,10 +101,13 @@ public class DiscoveryEndpoint {
 		}
 	};
 
-	@RequestMapping(value={"/.well-known/webfinger"},
-			params={"resource", "rel=http://openid.net/specs/connect/1.0/issuer"}, produces = "application/json")
-	public String webfinger(@RequestParam("resource") String resource, Model model) {
+	@RequestMapping(value={"/" + WEBFINGER_URL}, produces = MediaType.APPLICATION_JSON_VALUE)
+	public String webfinger(@RequestParam("resource") String resource, @RequestParam(value = "rel", required = false) String rel, Model model) {
 
+		if (!Strings.isNullOrEmpty(rel) && !rel.equals("http://openid.net/specs/connect/1.0/issuer")) {
+			logger.warn("Responding to webfinger request for non-OIDC relation: " + rel);
+		}
+		
 		if (!resource.equals(config.getIssuer())) {
 			// it's not the issuer directly, need to check other methods
 
@@ -96,40 +115,52 @@ public class DiscoveryEndpoint {
 			if (resourceUri != null
 					&& resourceUri.getScheme() != null
 					&& resourceUri.getScheme().equals("acct")) {
-				// acct: URI
+				// acct: URI (email address format)
 
-				UserInfo user = userService.getByUsername(resourceUri.getUserInfo()); // first part is the username
+				// check on email addresses first
+				UserInfo user = userService.getByEmailAddress(resourceUri.getUserInfo() + "@" + resourceUri.getHost());
 
 				if (user == null) {
-					logger.info("User not found: " + resource);
-					model.addAttribute("code", HttpStatus.NOT_FOUND);
-					return "httpCodeView";
-				}
+					// user wasn't found, see if the local part of the username matches, plus our issuer host
 
-				UriComponents issuerComponents = UriComponentsBuilder.fromHttpUrl(config.getIssuer()).build();
-				if (!Strings.nullToEmpty(issuerComponents.getHost())
-						.equals(Strings.nullToEmpty(resourceUri.getHost()))) {
-					logger.info("Host mismatch, expected " + issuerComponents.getHost() + " got " + resourceUri.getHost());
-					model.addAttribute("code", HttpStatus.NOT_FOUND);
-					return "httpCodeView";
-				}
+					user = userService.getByUsername(resourceUri.getUserInfo()); // first part is the username
 
+					if (user != null) {
+						// username matched, check the host component
+						UriComponents issuerComponents = UriComponentsBuilder.fromHttpUrl(config.getIssuer()).build();
+						if (!Strings.nullToEmpty(issuerComponents.getHost())
+								.equals(Strings.nullToEmpty(resourceUri.getHost()))) {
+							logger.info("Host mismatch, expected " + issuerComponents.getHost() + " got " + resourceUri.getHost());
+							model.addAttribute(HttpCodeView.CODE, HttpStatus.NOT_FOUND);
+							return HttpCodeView.VIEWNAME;
+						}
+
+					} else {
+
+						// if the user's still null, punt and say we didn't find them
+
+						logger.info("User not found: " + resource);
+						model.addAttribute(HttpCodeView.CODE, HttpStatus.NOT_FOUND);
+						return HttpCodeView.VIEWNAME;
+					}
+
+				}
 
 			} else {
 				logger.info("Unknown URI format: " + resource);
-				model.addAttribute("code", HttpStatus.NOT_FOUND);
-				return "httpCodeView";
+				model.addAttribute(HttpCodeView.CODE, HttpStatus.NOT_FOUND);
+				return HttpCodeView.VIEWNAME;
 			}
 		}
 
-		// if we got here, then we're good
+		// if we got here, then we're good, return ourselves
 		model.addAttribute("resource", resource);
 		model.addAttribute("issuer", config.getIssuer());
 
 		return "webfingerView";
 	}
 
-	@RequestMapping("/.well-known/openid-configuration")
+	@RequestMapping("/" + OPENID_CONFIGURATION_URL)
 	public String providerConfiguration(Model model) {
 
 		/*
@@ -260,26 +291,35 @@ public class DiscoveryEndpoint {
 
 		Collection<JWSAlgorithm> serverSigningAlgs = signService.getAllSigningAlgsSupported();
 		Collection<JWSAlgorithm> clientSymmetricSigningAlgs = Lists.newArrayList(JWSAlgorithm.HS256, JWSAlgorithm.HS384, JWSAlgorithm.HS512);
-		Collection<JWSAlgorithm> clientSymmetricAndAsymmetricSigningAlgs = Lists.newArrayList(JWSAlgorithm.HS256, JWSAlgorithm.HS384, JWSAlgorithm.HS512, JWSAlgorithm.RS256, JWSAlgorithm.RS384, JWSAlgorithm.RS512);
+		Collection<JWSAlgorithm> clientSymmetricAndAsymmetricSigningAlgs = Lists.newArrayList(JWSAlgorithm.HS256, JWSAlgorithm.HS384, JWSAlgorithm.HS512, 
+				JWSAlgorithm.RS256, JWSAlgorithm.RS384, JWSAlgorithm.RS512, 
+				JWSAlgorithm.ES256, JWSAlgorithm.ES384, JWSAlgorithm.ES512, 
+				JWSAlgorithm.PS256, JWSAlgorithm.PS384, JWSAlgorithm.PS512);
+		Collection<Algorithm> clientSymmetricAndAsymmetricSigningAlgsWithNone = Lists.newArrayList(JWSAlgorithm.HS256, JWSAlgorithm.HS384, JWSAlgorithm.HS512, 
+				JWSAlgorithm.RS256, JWSAlgorithm.RS384, JWSAlgorithm.RS512, 
+				JWSAlgorithm.ES256, JWSAlgorithm.ES384, JWSAlgorithm.ES512, 
+				JWSAlgorithm.PS256, JWSAlgorithm.PS384, JWSAlgorithm.PS512, 
+				Algorithm.NONE);
+		ArrayList<String> grantTypes = Lists.newArrayList("authorization_code", "implicit", "urn:ietf:params:oauth:grant-type:jwt-bearer", "client_credentials", "urn:ietf:params:oauth:grant_type:redelegate");
 
-		Map<String, Object> m = new HashMap<String, Object>();
+		Map<String, Object> m = new HashMap<>();
 		m.put("issuer", config.getIssuer());
 		m.put("authorization_endpoint", baseUrl + "authorize");
 		m.put("token_endpoint", baseUrl + "token");
-		m.put("userinfo_endpoint", baseUrl + "userinfo");
+		m.put("userinfo_endpoint", baseUrl + UserInfoEndpoint.URL);
 		//check_session_iframe
 		//end_session_endpoint
-		m.put("jwks_uri", baseUrl + "jwk");
-		m.put("registration_endpoint", baseUrl + "register");
-		m.put("scopes_supported", scopeService.toStrings(scopeService.getDynReg())); // these are the scopes that you can dynamically register for, which is what matters for discovery
+		m.put("jwks_uri", baseUrl + JWKSetPublishingEndpoint.URL);
+		m.put("registration_endpoint", baseUrl + DynamicClientRegistrationEndpoint.URL);
+		m.put("scopes_supported", scopeService.toStrings(scopeService.getUnrestricted())); // these are the scopes that you can dynamically register for, which is what matters for discovery
 		m.put("response_types_supported", Lists.newArrayList("code", "token")); // we don't support these yet: , "id_token", "id_token token"));
-		m.put("grant_types_supported", Lists.newArrayList("authorization_code", "implicit", "urn:ietf:params:oauth:grant-type:jwt-bearer", "client_credentials", "urn:ietf:params:oauth:grant_type:redelegate"));
+		m.put("grant_types_supported", grantTypes);
 		//acr_values_supported
 		m.put("subject_types_supported", Lists.newArrayList("public", "pairwise"));
 		m.put("userinfo_signing_alg_values_supported", Collections2.transform(clientSymmetricAndAsymmetricSigningAlgs, toAlgorithmName));
 		m.put("userinfo_encryption_alg_values_supported", Collections2.transform(encService.getAllEncryptionAlgsSupported(), toAlgorithmName));
 		m.put("userinfo_encryption_enc_values_supported", Collections2.transform(encService.getAllEncryptionEncsSupported(), toAlgorithmName));
-		m.put("id_token_signing_alg_values_supported", Collections2.transform(clientSymmetricAndAsymmetricSigningAlgs, toAlgorithmName));
+		m.put("id_token_signing_alg_values_supported", Collections2.transform(clientSymmetricAndAsymmetricSigningAlgsWithNone, toAlgorithmName));
 		m.put("id_token_encryption_alg_values_supported", Collections2.transform(encService.getAllEncryptionAlgsSupported(), toAlgorithmName));
 		m.put("id_token_encryption_enc_values_supported", Collections2.transform(encService.getAllEncryptionEncsSupported(), toAlgorithmName));
 		m.put("request_object_signing_alg_values_supported", Collections2.transform(clientSymmetricAndAsymmetricSigningAlgs, toAlgorithmName));
@@ -301,13 +341,14 @@ public class DiscoveryEndpoint {
 				"picture",
 				"website",
 				"gender",
-				"zone_info",
+				"zoneinfo",
 				"locale",
-				"updated_time",
+				"updated_at",
 				"birthdate",
 				"email",
 				"email_verified",
 				"phone_number",
+				"phone_number_verified",
 				"address"
 				));
 		m.put("service_documentation", baseUrl + "about");
@@ -320,12 +361,12 @@ public class DiscoveryEndpoint {
 		m.put("op_policy_uri", baseUrl + "about");
 		m.put("op_tos_uri", baseUrl + "about");
 
-		m.put("introspection_endpoint", baseUrl + "introspect"); // token introspection endpoint for verifying tokens
-		m.put("revocation_endpoint", baseUrl + "revoke"); // token revocation endpoint
+		m.put("introspection_endpoint", baseUrl + IntrospectionEndpoint.URL); // token introspection endpoint for verifying tokens
+		m.put("revocation_endpoint", baseUrl + RevocationEndpoint.URL); // token revocation endpoint
 
-		model.addAttribute("entity", m);
+		model.addAttribute(JsonEntityView.ENTITY, m);
 
-		return "jsonEntityView";
+		return JsonEntityView.VIEWNAME;
 	}
 
 }
